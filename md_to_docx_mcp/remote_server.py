@@ -152,14 +152,40 @@ async def convert_md_to_docx(
         os.unlink(tmp_md_path)
         os.unlink(tmp_docx_path)
         
-        return f"""成功使用 Pandoc 將 Markdown 轉換為 DOCX。
+        # 分隔 base64 內容以便更容易複製
+        return f"""✅ 成功將 Markdown 轉換為 DOCX！
 
-檔案名稱：{filename}
-MIME 類型：application/vnd.openxmlformats-officedocument.wordprocessingml.document
-功能：{'目錄、' if include_toc else ''}程式碼高亮、增強格式
+📄 檔案資訊：
+- 檔案名稱：{filename}
+- MIME 類型：application/vnd.openxmlformats-officedocument.wordprocessingml.document
+- 功能：{'目錄、' if include_toc else ''}程式碼高亮、增強格式
+- Base64 長度：{len(base64_content)} 字元
 
-Base64 內容：
-{base64_content}"""
+📋 Base64 內容（請複製以下內容）：
+========================================
+{base64_content}
+========================================
+
+💡 如何使用：
+1. 複製上面的 Base64 內容
+2. 使用以下方法之一轉換成檔案：
+
+Python:
+```python
+import base64
+with open("{filename}", "wb") as f:
+    f.write(base64.b64decode(base64_content))
+```
+
+JavaScript:
+```javascript
+const fs = require('fs');
+const buffer = Buffer.from(base64Content, 'base64');
+fs.writeFileSync('{filename}', buffer);
+```
+
+線上工具：
+前往 https://base64.guru/converter/decode/file 貼上內容並下載"""
     
     except Exception as e:
         logger.error(f"轉換 Markdown 到 DOCX 時發生錯誤：{e}")
