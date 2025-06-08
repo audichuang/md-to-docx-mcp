@@ -179,6 +179,16 @@ OAUTH_PASSWORD=your-secure-password-here
 # Server Settings (optional)
 # HOST=0.0.0.0
 # PORT=8000
+
+# Public URL (required for production)
+# SERVER_URL=https://your-domain.com
 ```
 
 **Security Note**: Always use strong passwords and HTTPS in production!
+
+## 🎯 Key Features of Remote Server
+
+1. **Direct Download Links** - No base64 conversion needed!
+2. **30-minute File Storage** - Files are automatically cleaned up
+3. **OAuth 2.0 Security** - Secure authentication flow
+4. **Beautiful Chinese UI** - User-friendly login page

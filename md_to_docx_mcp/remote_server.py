@@ -7,6 +7,7 @@ import secrets
 import urllib.parse
 import base64
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
@@ -32,6 +33,9 @@ if OAUTH_PASSWORD == "md-to-docx-mcp-password":
 # 記憶體中儲存 OAuth 資料
 auth_codes = {}  # code -> {client_id, redirect_uri, expires_at, username}
 access_tokens = {}  # token -> {username, expires_at, scope}
+
+# 儲存生成的檔案（暫時存在記憶體中，生產環境應使用資料庫或物件儲存）
+generated_files = {}  # file_id -> {filename, content, created_at, expires_at}
 
 # 建立 FastMCP 伺服器
 mcp = FastMCP("md-to-docx-remote")
@@ -142,48 +146,49 @@ async def convert_md_to_docx(
             extra_args=extra_args
         )
         
-        # 讀取並編碼
+        # 讀取檔案內容
         with open(tmp_docx_path, 'rb') as f:
             docx_content = f.read()
         
-        base64_content = base64.b64encode(docx_content).decode('utf-8')
+        # 生成唯一檔案 ID
+        file_id = str(uuid.uuid4())
         
-        # 清理
+        # 儲存檔案資訊（30分鐘後過期）
+        generated_files[file_id] = {
+            'filename': filename,
+            'content': docx_content,
+            'created_at': time.time(),
+            'expires_at': time.time() + 1800,  # 30 分鐘
+            'size': len(docx_content)
+        }
+        
+        # 清理暫存檔案
         os.unlink(tmp_md_path)
         os.unlink(tmp_docx_path)
         
-        # 使用 XML 格式輸出，更簡潔且容易解析
+        # 清理過期檔案
+        cleanup_expired_files()
+        
+        # 取得伺服器 URL（從環境變數或使用預設值）
+        server_url = os.getenv('SERVER_URL', 'http://localhost:8000')
+        
+        # 計算檔案大小（KB）
+        file_size_kb = len(docx_content) / 1024
+        
+        # 簡潔的輸出格式，直接提供下載連結
         return f"""✅ 成功將 Markdown 轉換為 DOCX！
 
 📄 檔案資訊：
 - 檔案名稱：{filename}
-- MIME 類型：application/vnd.openxmlformats-officedocument.wordprocessingml.document
+- 檔案大小：{file_size_kb:.1f} KB
 - 功能：{'目錄、' if include_toc else ''}程式碼高亮、增強格式
-- 內容長度：{len(base64_content)} 字元
 
-<docx_file>
-    <filename>{filename}</filename>
-    <mime_type>application/vnd.openxmlformats-officedocument.wordprocessingml.document</mime_type>
-    <encoding>base64</encoding>
-    <content>{base64_content}</content>
-</docx_file>
+🔗 下載連結：
+{server_url}/download/{file_id}
 
-💡 如何使用：
-1. 複製 <content> 標籤內的 base64 內容
-2. 使用線上工具解碼：https://base64.guru/converter/decode/file
-3. 或使用以下 Python 程式碼自動提取並轉換：
+⏰ 有效期限：30 分鐘
 
-```python
-import re
-import base64
-
-# 假設 response 是上面的回應內容
-match = re.search(r'<content>(.*?)</content>', response, re.DOTALL)
-if match:
-    base64_content = match.group(1).strip()
-    with open("output.docx", "wb") as f:
-        f.write(base64.b64decode(base64_content))
-```"""
+💡 使用方式：點擊上方連結直接下載 .docx 檔案"""
     
     except Exception as e:
         logger.error(f"轉換 Markdown 到 DOCX 時發生錯誤：{e}")
@@ -451,6 +456,14 @@ LOGIN_PAGE_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
+def cleanup_expired_files():
+    """清理過期的檔案"""
+    current_time = time.time()
+    expired_ids = [file_id for file_id, data in generated_files.items() if data['expires_at'] < current_time]
+    for file_id in expired_ids:
+        del generated_files[file_id]
+        logger.info(f"清理過期檔案：{file_id}")
+
 def cleanup_expired_tokens():
     """移除過期的授權碼和存取權杖。"""
     current_time = time.time()
@@ -504,6 +517,81 @@ def run_remote_server(
             # 解析查詢參數
             query_string = scope.get("query_string", b"").decode("utf-8")
             query_params = urllib.parse.parse_qs(query_string)
+            
+            # 處理檔案下載
+            if path.startswith("/download/"):
+                file_id = path.split("/download/")[1]
+                
+                # 清理過期檔案
+                cleanup_expired_files()
+                
+                # 檢查檔案是否存在
+                if file_id in generated_files:
+                    file_data = generated_files[file_id]
+                    
+                    # 準備回應
+                    await send({
+                        'type': 'http.response.start',
+                        'status': 200,
+                        'headers': [
+                            (b'content-type', b'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+                            (b'content-disposition', f'attachment; filename="{file_data["filename"]}"'.encode()),
+                            (b'cache-control', b'no-cache'),
+                            (b'content-length', str(file_data['size']).encode()),
+                        ],
+                    })
+                    await send({
+                        'type': 'http.response.body',
+                        'body': file_data['content'],
+                    })
+                else:
+                    # 檔案不存在或已過期
+                    error_html = """<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>檔案不存在</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f5f5f5;
+        }
+        .error-container {
+            text-align: center;
+            padding: 40px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        h1 { color: #dc3545; }
+        p { color: #6c757d; }
+    </style>
+</head>
+<body>
+    <div class="error-container">
+        <h1>❌ 檔案不存在</h1>
+        <p>檔案可能已過期或不存在。</p>
+        <p>檔案有效期限為 30 分鐘。</p>
+    </div>
+</body>
+</html>"""
+                    await send({
+                        'type': 'http.response.start',
+                        'status': 404,
+                        'headers': [
+                            (b'content-type', b'text/html; charset=utf-8'),
+                        ],
+                    })
+                    await send({
+                        'type': 'http.response.body',
+                        'body': error_html.encode('utf-8'),
+                    })
+                return
             
             # 處理 OAuth 發現端點
             if path == "/.well-known/oauth-authorization-server":
