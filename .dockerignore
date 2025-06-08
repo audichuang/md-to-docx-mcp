@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+*.egg-info/
+dist/
+build/
+
+# Git
+.git/
+.gitignore
+
+# 測試檔案
+test_*.py
+*.docx
+
+# 環境變數（敏感資訊）
+.env
+.env.local
+
+# 編輯器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# 其他
+CLAUDE.md
+*.log
