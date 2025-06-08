@@ -45,3 +45,6 @@ test_output*
 
 # Claude 設定檔
 CLAUDE.md
+
+# 環境變數
+.env

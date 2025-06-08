@@ -7,6 +7,10 @@ requires-python = ">=3.8"
 dependencies = [
     "mcp>=0.1.0",
     "pypandoc_binary>=1.13",
+    "fastmcp>=0.1.0",
+    "uvicorn>=0.20.0",
+    "python-dotenv>=0.19.0",
+    "starlette>=0.27.0",
 ]
 
 [build-system]
@@ -15,3 +19,4 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 md-to-docx-mcp = "md_to_docx_mcp.server:main"
+md-to-docx-mcp-remote = "md_to_docx_mcp.remote_server:run_remote_server"

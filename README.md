@@ -2,6 +2,10 @@
 
 This MCP (Model Context Protocol) server converts Markdown to DOCX format and returns the result as base64-encoded content using the powerful Pandoc engine.
 
+## 🚀 Now with Remote MCP Support!
+
+This server now supports the [Claude.ai Integrations](https://www.anthropic.com/news/integrations) feature, allowing you to use it directly from Claude.ai without local installation.
+
 ## Features
 
 - **Syntax highlighting** for code blocks
@@ -22,7 +26,33 @@ pip install -e .
 
 ## Usage
 
-### As an MCP Server
+### Option 1: Remote Server (for Claude.ai Integrations)
+
+Run the server with OAuth authentication:
+
+```bash
+# 1. Set up environment variables (copy and edit .env.example)
+cp .env.example .env
+# Edit .env to set your OAuth credentials
+
+# 2. Run the remote server
+python -m md_to_docx_mcp.remote_server
+
+# Or use the installed script
+md-to-docx-mcp-remote
+```
+
+The server will start with:
+- OAuth discovery: `http://localhost:8000/.well-known/oauth-authorization-server`
+- OAuth authorize: `http://localhost:8000/oauth/authorize`
+- SSE endpoint: `http://localhost:8000/sse`
+
+To use with Claude.ai:
+1. Deploy the server to a public URL (e.g., using ngrok, Railway, or your preferred hosting)
+2. Add the integration in Claude.ai using your public SSE endpoint URL
+3. Claude will automatically handle the OAuth flow
+
+### Option 2: Local MCP Server
 
 Add this server to your MCP configuration:
 
@@ -133,3 +163,22 @@ This MCP server uses pypandoc (Python wrapper for Pandoc) because:
 
 - `mcp` - Model Context Protocol implementation
 - `pypandoc_binary` - Pandoc with Python bindings (includes Pandoc binary)
+- `fastmcp` - FastMCP for remote server support
+- `uvicorn` - ASGI server for remote deployment
+- `python-dotenv` - Environment variable management
+
+## Environment Variables (for Remote Server)
+
+Create a `.env` file based on `.env.example`:
+
+```env
+# OAuth Authentication
+OAUTH_USERNAME=admin
+OAUTH_PASSWORD=your-secure-password-here
+
+# Server Settings (optional)
+# HOST=0.0.0.0
+# PORT=8000
+```
+
+**Security Note**: Always use strong passwords and HTTPS in production!
