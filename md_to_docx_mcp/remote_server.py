@@ -734,8 +734,12 @@ def run_remote_server(
                         'redirect_uri': redirect_uri,
                         'expires_at': time.time() + 600,
                         'username': username,
-                        'scope': scope_param
+                        'scope': scope_param,
+                        'state': state  # 保存 state 參數
                     }
+                    
+                    # 記錄生成的授權碼資訊
+                    logger.info(f"生成授權碼：client_id={client_id}, state={state[:10] if state else 'None'}...")
                     
                     # 重新導向回客戶端並附上授權碼
                     redirect_params = {'code': auth_code}
@@ -805,6 +809,9 @@ def run_remote_server(
                 code = form_data.get('code', [''])[0]
                 redirect_uri = form_data.get('redirect_uri', [''])[0]
                 
+                # 記錄收到的 token 請求
+                logger.info(f"收到 token 請求：grant_type={grant_type}, code={code[:10] if code else 'None'}...")
+                
                 # 從 Authorization 標頭提取客戶端認證
                 auth_header = headers.get(b'authorization', b'').decode('utf-8')
                 client_id = None
@@ -814,11 +821,17 @@ def run_remote_server(
                     try:
                         credentials = base64.b64decode(auth_header[6:]).decode('utf-8')
                         client_id, client_secret = credentials.split(':', 1)
-                    except:
+                    except Exception as e:
+                        logger.error(f"解析 Basic auth 失敗：{e}")
                         pass
                 
+                # 如果沒有從 Basic auth 獲得 client_id，嘗試從表單獲取
+                if not client_id:
+                    client_id = form_data.get('client_id', [''])[0]
+                
                 if grant_type != 'authorization_code' or not code:
-                    error_response = json.dumps({'error': 'invalid_request'}).encode()
+                    logger.error(f"無效的請求：grant_type={grant_type}, code={bool(code)}")
+                    error_response = json.dumps({'error': 'invalid_request', 'error_description': 'Invalid grant_type or missing code'}).encode()
                     await send({
                         'type': 'http.response.start',
                         'status': 400,
@@ -835,8 +848,9 @@ def run_remote_server(
                 
                 # 驗證授權碼
                 auth_data = auth_codes.get(code)
-                if not auth_data or auth_data['expires_at'] < time.time():
-                    error_response = json.dumps({'error': 'invalid_grant'}).encode()
+                if not auth_data:
+                    logger.error(f"找不到授權碼：{code[:10]}...")
+                    error_response = json.dumps({'error': 'invalid_grant', 'error_description': 'Authorization code not found'}).encode()
                     await send({
                         'type': 'http.response.start',
                         'status': 400,
@@ -851,6 +865,26 @@ def run_remote_server(
                     })
                     return
                 
+                if auth_data['expires_at'] < time.time():
+                    logger.error(f"授權碼已過期：{code[:10]}...")
+                    error_response = json.dumps({'error': 'invalid_grant', 'error_description': 'Authorization code expired'}).encode()
+                    await send({
+                        'type': 'http.response.start',
+                        'status': 400,
+                        'headers': [
+                            (b'content-type', b'application/json'),
+                            (b'cache-control', b'no-store'),
+                        ],
+                    })
+                    await send({
+                        'type': 'http.response.body',
+                        'body': error_response,
+                    })
+                    return
+                
+                # 記錄成功驗證的授權碼
+                logger.info(f"授權碼驗證成功：client_id={auth_data['client_id']}, state={auth_data.get('state', 'None')[:10]}...")
+                
                 # 移除已使用的授權碼
                 del auth_codes[code]
                 
@@ -861,7 +895,8 @@ def run_remote_server(
                 access_tokens[access_token] = {
                     'username': auth_data['username'],
                     'expires_at': time.time() + 3600,  # 1 小時
-                    'scope': auth_data.get('scope', '')
+                    'scope': auth_data.get('scope', ''),
+                    'state': auth_data.get('state')  # 保存 state
                 }
                 
                 # 建立權杖回應
@@ -871,6 +906,12 @@ def run_remote_server(
                     'expires_in': 3600,
                     'scope': auth_data.get('scope', '')
                 }
+                
+                # 如果有 state，包含在回應中（雖然 OAuth 2.0 規範不要求這樣做，但可能有助於 Claude）
+                if auth_data.get('state'):
+                    token_response['state'] = auth_data['state']
+                
+                logger.info(f"發送 token 回應：access_token={access_token[:10]}..., state={auth_data.get('state', 'None')[:10] if auth_data.get('state') else 'None'}...")
                 
                 response_body = json.dumps(token_response).encode()
                 await send({
