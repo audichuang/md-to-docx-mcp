@@ -94,7 +94,10 @@ async def convert_md_to_docx(
     include_toc: bool = False
 ) -> str:
     """
-    將 Markdown 文字轉換為 DOCX 格式並返回 base64 編碼。
+    將 Markdown 文字轉換為 DOCX 格式並提供下載連結。
+    
+    此工具會生成一個可下載的 DOCX 檔案，並返回下載連結供使用者直接下載。
+    重要：請將回應中的下載連結直接顯示給使用者。
     
     Args:
         markdown_text: 要轉換的 Markdown 文字
@@ -104,7 +107,7 @@ async def convert_md_to_docx(
         include_toc: 是否包含目錄（預設：false）
     
     Returns:
-        包含檔案名稱、MIME 類型和 base64 內容的格式化字串
+        包含下載連結的回應訊息，請確保將連結顯示給使用者
     """
     if not filename.endswith('.docx'):
         filename += '.docx'
@@ -175,20 +178,25 @@ async def convert_md_to_docx(
         # 計算檔案大小（KB）
         file_size_kb = len(docx_content) / 1024
         
-        # 簡潔的輸出格式，直接提供下載連結
-        return f"""✅ 成功將 Markdown 轉換為 DOCX！
+        # 格式化輸出，強調下載連結
+        download_url = f"{server_url}/download/{file_id}"
+        
+        # 使用明確的格式讓 Claude 知道要顯示給使用者
+        return f"""【轉換成功】
+
+您的 Markdown 檔案已成功轉換為 DOCX 格式！
 
 📄 檔案資訊：
-- 檔案名稱：{filename}
-- 檔案大小：{file_size_kb:.1f} KB
-- 功能：{'目錄、' if include_toc else ''}程式碼高亮、增強格式
+• 檔案名稱：{filename}
+• 檔案大小：{file_size_kb:.1f} KB
+• 包含功能：{'目錄、' if include_toc else ''}程式碼高亮、增強格式
 
-🔗 下載連結：
-{server_url}/download/{file_id}
+📥 **下載連結：**
+{download_url}
 
-⏰ 有效期限：30 分鐘
+⏰ 注意：此連結將在 30 分鐘後失效，請盡快下載。
 
-💡 使用方式：點擊上方連結直接下載 .docx 檔案"""
+提示：請直接點擊連結下載，或複製連結到瀏覽器開啟。"""
     
     except Exception as e:
         logger.error(f"轉換 Markdown 到 DOCX 時發生錯誤：{e}")
