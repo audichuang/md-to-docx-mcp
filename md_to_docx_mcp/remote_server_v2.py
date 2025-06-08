@@ -10,6 +10,7 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
+import uuid
 
 from mcp.server.fastmcp import FastMCP
 import pypandoc
@@ -32,6 +33,9 @@ if OAUTH_PASSWORD == "md-to-docx-mcp-password":
 # 記憶體中儲存 OAuth 資料
 auth_codes = {}  # code -> {client_id, redirect_uri, expires_at, username}
 access_tokens = {}  # token -> {username, expires_at, scope}
+
+# 儲存生成的檔案（暫時存在記憶體中，生產環境應使用資料庫或物件儲存）
+generated_files = {}  # file_id -> {filename, content, created_at, expires_at}
 
 # 建立 FastMCP 伺服器
 mcp = FastMCP("md-to-docx-remote")
@@ -80,6 +84,13 @@ def convert_md_to_docx_pandoc(markdown_text: str, filename: str = "document.docx
         if os.path.exists(tmp_docx_path):
             os.unlink(tmp_docx_path)
 
+def cleanup_expired_files():
+    """清理過期的檔案"""
+    current_time = time.time()
+    expired_ids = [file_id for file_id, data in generated_files.items() if data['expires_at'] < current_time]
+    for file_id in expired_ids:
+        del generated_files[file_id]
+
 # MCP 工具定義
 @mcp.tool()
 async def convert_md_to_docx(
@@ -90,7 +101,7 @@ async def convert_md_to_docx(
     include_toc: bool = False
 ) -> str:
     """
-    將 Markdown 文字轉換為 DOCX 格式並返回 base64 編碼。
+    將 Markdown 文字轉換為 DOCX 格式。
     
     Args:
         markdown_text: 要轉換的 Markdown 文字
@@ -100,7 +111,7 @@ async def convert_md_to_docx(
         include_toc: 是否包含目錄（預設：false）
     
     Returns:
-        包含檔案名稱、MIME 類型和 base64 內容的格式化字串
+        包含檔案資訊和下載資訊的結構化回應
     """
     if not filename.endswith('.docx'):
         filename += '.docx'
@@ -142,52 +153,62 @@ async def convert_md_to_docx(
             extra_args=extra_args
         )
         
-        # 讀取並編碼
+        # 讀取檔案內容
         with open(tmp_docx_path, 'rb') as f:
             docx_content = f.read()
         
-        base64_content = base64.b64encode(docx_content).decode('utf-8')
+        # 生成唯一檔案 ID
+        file_id = str(uuid.uuid4())
+        
+        # 儲存檔案資訊（30分鐘後過期）
+        generated_files[file_id] = {
+            'filename': filename,
+            'content': docx_content,
+            'created_at': time.time(),
+            'expires_at': time.time() + 1800,  # 30 分鐘
+            'size': len(docx_content)
+        }
         
         # 清理
         os.unlink(tmp_md_path)
         os.unlink(tmp_docx_path)
         
-        # 使用 XML 格式輸出，更簡潔且容易解析
+        # 清理過期檔案
+        cleanup_expired_files()
+        
+        # 計算檔案大小（KB）
+        file_size_kb = len(docx_content) / 1024
+        
+        # 簡潔的輸出格式
         return f"""✅ 成功將 Markdown 轉換為 DOCX！
 
 📄 檔案資訊：
 - 檔案名稱：{filename}
-- MIME 類型：application/vnd.openxmlformats-officedocument.wordprocessingml.document
+- 檔案大小：{file_size_kb:.1f} KB
 - 功能：{'目錄、' if include_toc else ''}程式碼高亮、增強格式
-- 內容長度：{len(base64_content)} 字元
 
-<docx_file>
-    <filename>{filename}</filename>
-    <mime_type>application/vnd.openxmlformats-officedocument.wordprocessingml.document</mime_type>
-    <encoding>base64</encoding>
-    <content>{base64_content}</content>
-</docx_file>
+🔗 下載資訊：
+- 檔案 ID：{file_id}
+- 有效期限：30 分鐘
 
-💡 如何使用：
-1. 複製 <content> 標籤內的 base64 內容
-2. 使用線上工具解碼：https://base64.guru/converter/decode/file
-3. 或使用以下 Python 程式碼自動提取並轉換：
+💡 下載方式：
+1. 訪問：/download/{file_id}
+2. 或使用以下 Python 程式碼：
 
 ```python
-import re
-import base64
+import requests
 
-# 假設 response 是上面的回應內容
-match = re.search(r'<content>(.*?)</content>', response, re.DOTALL)
-if match:
-    base64_content = match.group(1).strip()
-    with open("output.docx", "wb") as f:
-        f.write(base64.b64decode(base64_content))
-```"""
+# 下載檔案
+response = requests.get(f"http://your-server/download/{file_id}")
+with open("{filename}", "wb") as f:
+    f.write(response.content)
+```
+
+⚠️ 注意：檔案將在 30 分鐘後自動刪除"""
     
     except Exception as e:
         logger.error(f"轉換 Markdown 到 DOCX 時發生錯誤：{e}")
-        return f"轉換 Markdown 到 DOCX 時發生錯誤：{str(e)}"
+        return f"❌ 轉換失敗：{str(e)}"
 
 @mcp.tool()
 async def get_server_info() -> str:
@@ -197,8 +218,13 @@ async def get_server_info() -> str:
     Returns:
         伺服器名稱、版本和支援功能的資訊
     """
-    return """MD to DOCX MCP Remote Server
-版本：1.0.0
+    return """MD to DOCX MCP Remote Server (v2)
+版本：2.0.0
+
+✨ 新功能：
+- 檔案下載連結（避免 base64 token 消耗）
+- 30 分鐘有效期限
+- 自動清理過期檔案
 
 支援功能：
 - Markdown 轉 DOCX（使用 Pandoc）
@@ -206,9 +232,11 @@ async def get_server_info() -> str:
 - 數學公式
 - 目錄生成
 - 元數據支援（標題、作者）
-- Base64 編碼輸出
 
 使用 pypandoc（Pandoc 的 Python 包裝器）進行高品質文件轉換。"""
+
+# 其他 OAuth 相關程式碼保持不變...
+# （省略重複的 OAuth 程式碼，與原版相同）
 
 # HTML 登入頁面模板
 LOGIN_PAGE_TEMPLATE = """<!DOCTYPE html>
@@ -471,7 +499,7 @@ def run_remote_server(
     log_level: str = "info"
 ):
     """執行支援 SSE 和 OAuth 認證的遠端伺服器。"""
-    logger.info(f"啟動 MD to DOCX MCP Remote Server（含 OAuth）於 {host}:{port}")
+    logger.info(f"啟動 MD to DOCX MCP Remote Server v2（含 OAuth）於 {host}:{port}")
     logger.info("=" * 60)
     logger.info("🔐 OAuth 認證資訊：")
     logger.info(f"   使用者名稱：{OAUTH_USERNAME}")
@@ -488,7 +516,7 @@ def run_remote_server(
     import uvicorn
     from starlette.applications import Starlette
     from starlette.routing import Mount, Route
-    from starlette.responses import PlainTextResponse
+    from starlette.responses import PlainTextResponse, Response
     from starlette.middleware import Middleware
     
     # 建立含 OAuth 認證的自訂 ASGI 應用程式
@@ -504,6 +532,46 @@ def run_remote_server(
             # 解析查詢參數
             query_string = scope.get("query_string", b"").decode("utf-8")
             query_params = urllib.parse.parse_qs(query_string)
+            
+            # 處理檔案下載
+            if path.startswith("/download/"):
+                file_id = path.split("/download/")[1]
+                
+                # 清理過期檔案
+                cleanup_expired_files()
+                
+                # 檢查檔案是否存在
+                if file_id in generated_files:
+                    file_data = generated_files[file_id]
+                    
+                    # 準備回應
+                    await send({
+                        'type': 'http.response.start',
+                        'status': 200,
+                        'headers': [
+                            (b'content-type', b'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+                            (b'content-disposition', f'attachment; filename="{file_data["filename"]}"'.encode()),
+                            (b'cache-control', b'no-cache'),
+                        ],
+                    })
+                    await send({
+                        'type': 'http.response.body',
+                        'body': file_data['content'],
+                    })
+                else:
+                    # 檔案不存在或已過期
+                    await send({
+                        'type': 'http.response.start',
+                        'status': 404,
+                        'headers': [
+                            (b'content-type', b'text/plain; charset=utf-8'),
+                        ],
+                    })
+                    await send({
+                        'type': 'http.response.body',
+                        'body': '檔案不存在或已過期'.encode('utf-8'),
+                    })
+                return
             
             # 處理 OAuth 發現端點
             if path == "/.well-known/oauth-authorization-server":
@@ -889,7 +957,9 @@ def run_remote_server(
                 server_info = {
                     "mcp": "1.0",
                     "name": "md-to-docx-mcp",
-                    "description": "MD to DOCX MCP Server with OAuth authentication"
+                    "description": "MD to DOCX MCP Server v2 with OAuth authentication",
+                    "version": "2.0.0",
+                    "features": ["file-download", "oauth2", "pandoc-conversion"]
                 }
                 response_body = json.dumps(server_info).encode()
                 await send({
@@ -924,6 +994,7 @@ def run_remote_server(
     logger.info(f"OAuth 授權：http://{host}:{port}/oauth/authorize")
     logger.info(f"OAuth 權杖：http://{host}:{port}/oauth/token")
     logger.info(f"SSE 端點：http://{host}:{port}/sse (需要 Bearer 權杖)")
+    logger.info(f"檔案下載：http://{host}:{port}/download/{{file_id}}")
     logger.info("\n與 Claude.ai Integrations 使用：")
     logger.info(f"  整合 URL：https://your-domain.com/sse")
     logger.info("  Claude.ai 將自動處理 OAuth 流程")
